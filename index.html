@@ -131,7 +131,6 @@
         };
 
         const { auth, db } = initFirebase();
-        // Fallback ID se não houver config de ambiente
         const appId = 'client-manager-app'; 
 
         const getCollectionPath = (uid, collectionName = 'clients') => {
@@ -389,6 +388,78 @@
                     alert("Sincronização concluída!");
                 } catch (e) { alert("Erro ao sincronizar: " + e.message); }
                 finally { setIsSyncing(false); }
+            };
+
+            // --- RENEWAL LOGIC (RESTAURADO) ---
+            const checkRenewals = () => {
+                const today = new Date();
+                const currentMonth = today.getMonth();
+                const currentYear = today.getFullYear();
+                const suggestions = [];
+                const clientsByName = {};
+                
+                clients.forEach(client => {
+                    if (!clientsByName[client.name] || new Date(client.date) > new Date(clientsByName[client.name].date)) {
+                        clientsByName[client.name] = client;
+                    }
+                });
+
+                Object.values(clientsByName).forEach(client => {
+                    if (client.type === 'Mensal' && client.status !== 'Concluído') {
+                        const clientDate = new Date(client.date);
+                        if (clientDate.getMonth() !== currentMonth || clientDate.getFullYear() !== currentYear) {
+                            let renewalDate = today;
+                            if (client.dueDay) {
+                                renewalDate = new Date(today.getFullYear(), today.getMonth(), parseInt(client.dueDay));
+                            }
+                            suggestions.push({
+                                ...client,
+                                newDate: renewalDate.toISOString().split('T')[0],
+                                status: 'Pendente', 
+                                originalId: client.id
+                            });
+                        }
+                    }
+                });
+                setPendingRenewals(suggestions);
+                setShowRenewalModal(true);
+            };
+
+            const executeRenewals = async () => {
+                if (!user || !db) return;
+                setIsSyncing(true);
+                let count = 0;
+                const path = getCollectionPath(user.uid, 'clients');
+
+                for (const item of pendingRenewals) {
+                    const newEntry = {
+                        name: item.name,
+                        whatsapp: item.whatsapp || '',
+                        service: item.service || '',
+                        type: 'Mensal',
+                        value: Number(item.value),
+                        paymentMethod: item.paymentMethod || '',
+                        dueDay: item.dueDay || '',
+                        date: item.newDate,
+                        status: 'Pendente',
+                        notes: item.notes || ''
+                    };
+                    try {
+                        await addDoc(collection(db, path), newEntry);
+                        count++;
+                        if (webAppUrl) {
+                            await fetch(webAppUrl, {
+                                method: 'POST',
+                                mode: 'no-cors',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(newEntry)
+                            });
+                        }
+                    } catch (e) { console.error(e); }
+                }
+                setIsSyncing(false);
+                setShowRenewalModal(false);
+                alert(`${count} renovados!`);
             };
 
             // --- DOWNLOAD ---
